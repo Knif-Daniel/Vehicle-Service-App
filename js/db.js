@@ -24,6 +24,30 @@ const DB = (() => {
 
   let state = { vehicles: [], entries: [] };
   let cryptoKey = null; // { key: CryptoKey, saltB64 }
+  let pendingPush = false;
+  let onSyncError = null;
+
+  // Schreibt den verschlüsselten Datensatz zu GitHub (falls angemeldet). Legt beim allerersten
+  // Mal einen neuen privaten Gist an, danach wird derselbe Gist aktualisiert.
+  async function pushToRemote(envelope) {
+    if (typeof GitHubAuth === 'undefined' || !GitHubAuth.isLoggedIn()) return;
+    try {
+      const token = GitHubAuth.getToken();
+      const contentStr = JSON.stringify(envelope);
+      let gistId = GitHubAuth.getGistId();
+      if (!gistId) {
+        gistId = await GitHubSync.createGist(token, contentStr);
+        GitHubAuth.setGistId(gistId);
+      } else {
+        await GitHubSync.updateGist(token, gistId, contentStr);
+      }
+      pendingPush = false;
+    } catch (e) {
+      pendingPush = true;
+      console.warn('Push zu GitHub fehlgeschlagen', e);
+      if (typeof onSyncError === 'function') onSyncError(e);
+    }
+  }
 
   // Persist-Aufrufe werden verkettet, damit parallele Speichervorgänge sich nicht
   // gegenseitig mit veraltetem Stand überschreiben (jeder Lauf liest den aktuellen `state`).
@@ -33,7 +57,9 @@ const DB = (() => {
     persistChain = persistChain
       .then(async () => {
         const { iv, data } = await AppCrypto.encrypt(cryptoKey.key, JSON.stringify(state));
-        writeEnvelope({ v: 1, salt: cryptoKey.saltB64, iv, data });
+        const envelope = { v: 1, salt: cryptoKey.saltB64, iv, data, updatedAt: new Date().toISOString() };
+        writeEnvelope(envelope);
+        await pushToRemote(envelope);
       })
       .catch((e) => console.error('Speichern fehlgeschlagen', e));
     return persistChain;
@@ -77,6 +103,57 @@ const DB = (() => {
       return !!cryptoKey;
     },
 
+    hasPendingPush() {
+      return pendingPush;
+    },
+
+    setSyncErrorHandler(fn) {
+      onSyncError = fn;
+    },
+
+    // Roh-Envelope lesen/schreiben, ohne zu entschlüsseln - für den Sync-Abgleich vor dem Entsperren.
+    peekLocalEnvelope() {
+      return readEnvelope();
+    },
+
+    writeLocalEnvelope(envelope) {
+      writeEnvelope(envelope);
+    },
+
+    // Holt den aktuellen Stand aus dem GitHub-Gist und übernimmt ihn lokal, falls er neuer ist
+    // als der lokale Cache (oder lokal noch gar nichts vorhanden ist). Wirft bei Netzwerkfehlern,
+    // damit der Aufrufer bei Bedarf auf den lokalen Stand zurückfallen kann.
+    async pullFromRemote() {
+      if (typeof GitHubAuth === 'undefined' || !GitHubAuth.isLoggedIn()) return false;
+      const token = GitHubAuth.getToken();
+      let gistId = GitHubAuth.getGistId();
+      if (!gistId) {
+        gistId = await GitHubSync.findDataGist(token);
+        if (gistId) GitHubAuth.setGistId(gistId);
+      }
+      if (!gistId) return false; // noch nichts remote vorhanden (neuer Account)
+      const contentStr = await GitHubSync.fetchGistContent(token, gistId);
+      const remoteEnvelope = JSON.parse(contentStr);
+      const localEnvelope = readEnvelope();
+      if (!localEnvelope || (remoteEnvelope.updatedAt || '') > (localEnvelope.updatedAt || '')) {
+        writeEnvelope(remoteEnvelope);
+        return true;
+      }
+      return false;
+    },
+
+    async retryPush() {
+      const envelope = readEnvelope();
+      if (envelope && pendingPush) await pushToRemote(envelope);
+    },
+
+    // Erzwingt einen Push des aktuellen lokalen Stands, unabhängig vom pendingPush-Flag
+    // (für den "Jetzt synchronisieren"-Button).
+    async forcePush() {
+      const envelope = readEnvelope();
+      if (envelope) await pushToRemote(envelope);
+    },
+
     async setup(password) {
       cryptoKey = await AppCrypto.deriveKey(password);
       state = { vehicles: [], entries: [] };
@@ -96,6 +173,7 @@ const DB = (() => {
       };
       cryptoKey = derived;
       await cacheSession();
+      pushToRemote(envelope); // stellt sicher, dass z. B. ein frisch importierter Stand auch remote landet
     },
 
     // Versucht, eine zwischengespeicherte Sitzung (sessionStorage) ohne erneute Passworteingabe zu entsperren.
@@ -137,7 +215,20 @@ const DB = (() => {
       clearSession();
     },
 
-    resetAll() {
+    // Löscht auch den Remote-Gist (falls angemeldet) - sonst würde der nächste Sync die alten,
+    // nicht mehr entschlüsselbaren Daten wieder zurückholen.
+    async resetAll() {
+      if (typeof GitHubAuth !== 'undefined' && GitHubAuth.isLoggedIn()) {
+        const gistId = GitHubAuth.getGistId();
+        if (gistId) {
+          try {
+            await GitHubSync.deleteGist(GitHubAuth.getToken(), gistId);
+          } catch (e) {
+            console.warn('Remote-Gist konnte nicht gelöscht werden', e);
+          }
+          GitHubAuth.clearGistId();
+        }
+      }
       localStorage.removeItem(STORAGE_KEY);
       cryptoKey = null;
       state = { vehicles: [], entries: [] };

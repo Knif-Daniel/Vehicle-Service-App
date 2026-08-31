@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fahrzeug-service-v2';
+const CACHE_NAME = 'fahrzeug-service-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,8 @@ const ASSETS = [
   './js/app.js',
   './js/db.js',
   './js/crypto.js',
+  './js/githubsync.js',
+  './js/auth.js',
   './js/bootstrap.bundle.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -32,8 +34,11 @@ self.addEventListener('activate', (event) => {
 });
 
 // App-Shell-Strategie: Cache first, danach Netzwerk-Fallback + Cache-Update.
+// Cross-Origin-Requests (z. B. an die GitHub-API für den Sync) laufen ungecacht direkt durch,
+// damit dort immer der aktuelle Stand abgefragt wird.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  if (new URL(event.request.url).origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

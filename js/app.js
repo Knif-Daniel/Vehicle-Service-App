@@ -54,11 +54,14 @@
     bootstrap.Toast.getOrCreateInstance(el, { delay: 2200 }).show();
   }
 
-  function confirmDialog(message, onConfirm) {
+  function confirmDialog(message, onConfirm, options) {
+    const opts = options || {};
     const modalEl = document.getElementById('confirmModal');
     document.getElementById('confirmModalBody').textContent = message;
-    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     const okBtn = document.getElementById('confirmModalOk');
+    okBtn.textContent = opts.confirmLabel || 'Löschen';
+    okBtn.className = 'btn ' + (opts.confirmClass || 'btn-danger');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     const handler = () => {
       okBtn.removeEventListener('click', handler);
       modal.hide();
@@ -113,6 +116,10 @@
   }
 
   function render() {
+    if (!GitHubAuth.isLoggedIn()) {
+      renderLogin();
+      return;
+    }
     if (!DB.isUnlocked()) {
       renderUnlock();
       return;
@@ -128,11 +135,94 @@
 
   window.addEventListener('hashchange', render);
 
-  // ---------- Verschlüsselung: Setup / Entsperren ----------
+  // ---------- GitHub-Login / Verschlüsselung: Setup / Entsperren ----------
   function updateAuthMenu() {
-    document.getElementById('exportItem').classList.toggle('d-none', !DB.hasData());
-    document.getElementById('changePasswordItem').classList.toggle('d-none', !DB.isUnlocked());
-    document.getElementById('lockItem').classList.toggle('d-none', !DB.isUnlocked());
+    const loggedIn = GitHubAuth.isLoggedIn();
+    const unlocked = DB.isUnlocked();
+    document.getElementById('accountItem').classList.toggle('d-none', !loggedIn);
+    document.getElementById('accountDividerItem').classList.toggle('d-none', !loggedIn);
+    if (loggedIn) document.getElementById('accountUsername').textContent = GitHubAuth.getUsername() || '';
+    document.getElementById('syncNowItem').classList.toggle('d-none', !(loggedIn && unlocked));
+    document.getElementById('exportItem').classList.toggle('d-none', !(loggedIn && DB.hasData()));
+    document.getElementById('importItem').classList.toggle('d-none', !loggedIn);
+    document.getElementById('changePasswordItem').classList.toggle('d-none', !unlocked);
+    document.getElementById('lockItem').classList.toggle('d-none', !unlocked);
+    document.getElementById('logoutItem').classList.toggle('d-none', !loggedIn);
+  }
+
+  // Nach erfolgreichem GitHub-Login: neuesten Stand ziehen (falls vorhanden) und
+  // je nachdem Setup, Entsperren oder direkt die App zeigen.
+  async function proceedAfterLogin() {
+    try {
+      await DB.pullFromRemote();
+    } catch (e) {
+      console.warn('Sync beim Start fehlgeschlagen (evtl. offline):', e);
+    }
+    const resumed = await DB.tryResumeSession();
+    if (resumed) {
+      updateAuthMenu();
+      render();
+      return;
+    }
+    updateAuthMenu();
+    if (DB.hasData()) {
+      renderUnlock();
+    } else {
+      renderSetup();
+    }
+  }
+
+  function renderLogin() {
+    fabAdd.classList.add('d-none');
+    view.innerHTML = `
+    <div class="d-flex justify-content-center">
+      <div class="card auth-card shadow-sm mt-4" style="max-width: 460px; width: 100%;">
+        <div class="card-body p-4">
+          <div class="text-center mb-3">
+            <div class="auth-icon-wrap mb-3"><i class="bi bi-github fs-3"></i></div>
+            <h5 class="mt-2 mb-1">Mit GitHub anmelden</h5>
+            <p class="text-muted small mb-0">Deine Fahrzeugdaten werden verschlüsselt in einem privaten GitHub-Gist gespeichert, damit du von jedem Gerät mit demselben Konto darauf zugreifen kannst.</p>
+          </div>
+          <form id="loginForm">
+            <div class="mb-2">
+              <label class="form-label">GitHub Personal Access Token</label>
+              <input type="password" class="form-control" id="loginToken" required autocomplete="off" placeholder="ghp_…" />
+            </div>
+            <div class="mb-3">
+              <a href="https://github.com/settings/tokens/new?scopes=gist&description=Fahrzeug%20Service%20App" target="_blank" rel="noopener" class="small">
+                <i class="bi bi-box-arrow-up-right me-1"></i>Token mit Scope „gist" erstellen
+              </a>
+            </div>
+            <div class="alert alert-danger small py-2 d-none" id="loginError"></div>
+            <div class="alert alert-secondary small py-2 mb-3">
+              <i class="bi bi-info-circle me-1"></i>
+              Der Token wird nur lokal in diesem Browser gespeichert und ausschließlich für Anfragen an die GitHub-API verwendet. Deine Fahrzeugdaten selbst bleiben zusätzlich durch dein eigenes App-Passwort verschlüsselt - auch bei GitHub nicht einsehbar.
+            </div>
+            <button type="submit" class="btn btn-primary w-100" id="loginSubmitBtn"><i class="bi bi-box-arrow-in-right me-1"></i>Anmelden</button>
+          </form>
+        </div>
+      </div>
+    </div>`;
+
+    document.getElementById('loginForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const token = document.getElementById('loginToken').value.trim();
+      const errEl = document.getElementById('loginError');
+      const btn = document.getElementById('loginSubmitBtn');
+      errEl.classList.add('d-none');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Anmelden…';
+      try {
+        await GitHubAuth.login(token);
+        updateAuthMenu();
+        await proceedAfterLogin();
+      } catch (e) {
+        errEl.textContent = e.message || 'Anmeldung fehlgeschlagen.';
+        errEl.classList.remove('d-none');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-box-arrow-in-right me-1"></i>Anmelden';
+      }
+    });
   }
 
   function renderSetup() {
@@ -221,8 +311,8 @@
     });
 
     document.getElementById('resetAllBtn').addEventListener('click', () => {
-      confirmDialog('Wirklich ALLE Daten unwiderruflich löschen? Das kann nicht rückgängig gemacht werden.', () => {
-        DB.resetAll();
+      confirmDialog('Wirklich ALLE Daten unwiderruflich löschen - lokal und im GitHub-Gist? Das kann nicht rückgängig gemacht werden.', async () => {
+        await DB.resetAll();
         updateAuthMenu();
         renderSetup();
       });
@@ -568,12 +658,44 @@
     renderVehicleDetail(vehicleId);
   });
 
-  // ---------- Sperren / Passwort ändern ----------
+  // ---------- Sperren / Abmelden / Passwort ändern ----------
   document.getElementById('lockBtn').addEventListener('click', () => {
     DB.lock();
     updateAuthMenu();
     location.hash = '#/';
     renderUnlock();
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    confirmDialog(
+      'Von GitHub abmelden? Deine Daten bleiben sicher im GitHub-Gist gespeichert und sind nach erneuter Anmeldung wieder da.',
+      () => {
+        DB.lock();
+        GitHubAuth.logout();
+        updateAuthMenu();
+        location.hash = '#/';
+        renderLogin();
+      },
+      { confirmLabel: 'Abmelden', confirmClass: 'btn-primary' }
+    );
+  });
+
+  document.getElementById('syncNowBtn').addEventListener('click', async () => {
+    try {
+      const remoteWasNewer = await DB.pullFromRemote();
+      if (remoteWasNewer) {
+        DB.lock();
+        updateAuthMenu();
+        toast('Neuerer Stand von einem anderen Gerät gefunden - bitte Passwort erneut eingeben.');
+        location.hash = '#/';
+        renderUnlock();
+        return;
+      }
+      await DB.forcePush();
+      toast('Synchronisiert.');
+    } catch (e) {
+      toast('Synchronisierung fehlgeschlagen (offline?).');
+    }
   });
 
   const changePasswordModalEl = document.getElementById('changePasswordModal');
@@ -605,8 +727,9 @@
     }
   });
 
-  // ---------- Export / Import ----------
+  // ---------- Export / Import (nur angemeldet) ----------
   document.getElementById('exportBtn').addEventListener('click', () => {
+    if (!GitHubAuth.isLoggedIn()) return;
     let json;
     try {
       json = DB.exportData();
@@ -626,10 +749,13 @@
   });
 
   const importFile = document.getElementById('importFile');
-  document.getElementById('importBtn').addEventListener('click', () => importFile.click());
+  document.getElementById('importBtn').addEventListener('click', () => {
+    if (!GitHubAuth.isLoggedIn()) return;
+    importFile.click();
+  });
   importFile.addEventListener('change', () => {
     const file = importFile.files[0];
-    if (!file) return;
+    if (!file || !GitHubAuth.isLoggedIn()) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -646,20 +772,23 @@
     reader.readAsText(file);
   });
 
+  // ---------- Sync-Fehler & Wiederherstellung ----------
+  DB.setSyncErrorHandler(() => {
+    toast('Synchronisierung fehlgeschlagen - wird beim nächsten Mal erneut versucht.');
+  });
+
+  window.addEventListener('online', () => {
+    if (DB.isUnlocked()) DB.retryPush();
+  });
+
   // ---------- Start ----------
   (async function boot() {
     updateAuthMenu();
-    const resumed = await DB.tryResumeSession();
-    if (resumed) {
-      updateAuthMenu();
-      render();
+    if (!GitHubAuth.isLoggedIn()) {
+      renderLogin();
       return;
     }
-    if (DB.hasData()) {
-      renderUnlock();
-    } else {
-      renderSetup();
-    }
+    await proceedAfterLogin();
   })();
 
   // ---------- Service Worker (PWA offline) ----------
