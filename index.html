@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Fahrzeug Service</title>
+<meta name="description" content="Fahrzeuge verwalten und Serviceeinträge wie Ölwechsel oder Pickerl protokollieren." />
+
+<!-- Theme so früh wie möglich setzen, damit beim Laden kein falsches (helles/dunkles) Theme aufblitzt -->
+<script>
+(function () {
+  var stored = localStorage.getItem('fahrzeug-service-theme');
+  var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-bs-theme', theme);
+})();
+</script>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" id="themeColorMeta" content="#0d6efd" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Service" />
+
+<link rel="stylesheet" href="css/bootstrap.min.css" />
+<link rel="stylesheet" href="css/bootstrap-icons.css" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="navbar navbar-dark app-navbar sticky-top">
+  <div class="container-fluid">
+    <a class="navbar-brand d-flex align-items-center gap-2" href="#/" id="brandLink">
+      <i class="bi bi-car-front-fill fs-4"></i>
+      <span>Fahrzeug Service</span>
+    </a>
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-nav-icon" type="button" id="themeToggleBtn" title="Theme wechseln" aria-label="Theme wechseln">
+        <i class="bi bi-moon-stars-fill fs-5"></i>
+      </button>
+      <div class="dropdown">
+        <button class="btn btn-nav-icon" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Menü">
+          <i class="bi bi-three-dots-vertical fs-5"></i>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li id="exportItem" class="d-none"><button class="dropdown-item" id="exportBtn"><i class="bi bi-download me-2"></i>Backup exportieren</button></li>
+          <li><button class="dropdown-item" id="importBtn"><i class="bi bi-upload me-2"></i>Backup importieren</button></li>
+          <li id="changePasswordItem" class="d-none"><button class="dropdown-item" id="changePasswordBtn"><i class="bi bi-key-fill me-2"></i>Passwort ändern</button></li>
+          <li id="lockItem" class="d-none"><button class="dropdown-item" id="lockBtn"><i class="bi bi-lock-fill me-2"></i>Sperren</button></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><span class="dropdown-item-text small text-muted">Daten werden verschlüsselt lokal auf diesem Gerät gespeichert.</span></li>
+        </ul>
+      </div>
+    </div>
+    <input type="file" id="importFile" accept="application/json" class="d-none" />
+  </div>
+</nav>
+
+<main id="view" class="container py-3 pb-5"></main>
+
+<button id="fabAdd" class="btn btn-primary rounded-circle shadow fab d-none" title="Hinzufügen">
+  <i class="bi bi-plus-lg"></i>
+</button>
+
+<!-- ================= Fahrzeug Modal ================= -->
+<div class="modal fade" id="vehicleModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="vehicleForm">
+        <div class="modal-header">
+          <h5 class="modal-title" id="vehicleModalTitle">Fahrzeug hinzufügen</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="vehicleId" />
+          <div class="mb-3">
+            <label class="form-label">Name *</label>
+            <input type="text" class="form-control" id="vehicleName" placeholder="z. B. Mein Golf" required />
+          </div>
+          <div class="row">
+            <div class="col-6 mb-3">
+              <label class="form-label">Typ</label>
+              <select class="form-select" id="vehicleType"></select>
+            </div>
+            <div class="col-6 mb-3">
+              <label class="form-label">Baujahr</label>
+              <input type="number" class="form-control" id="vehicleYear" min="1900" max="2100" placeholder="z. B. 2018" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-6 mb-3">
+              <label class="form-label">Marke / Modell</label>
+              <input type="text" class="form-control" id="vehicleBrand" placeholder="z. B. VW Golf 7" />
+            </div>
+            <div class="col-6 mb-3">
+              <label class="form-label">Kennzeichen</label>
+              <input type="text" class="form-control" id="vehicleLicensePlate" placeholder="z. B. L-AB 123" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-6 mb-3">
+              <label class="form-label">Kilometerstand</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="vehicleKm" min="0" inputmode="numeric" />
+                <span class="input-group-text">km</span>
+              </div>
+            </div>
+            <div class="col-6 mb-3">
+              <label class="form-label">Betriebsstunden</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="vehicleHours" min="0" step="0.1" inputmode="decimal" />
+                <span class="input-group-text">h</span>
+              </div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Notizen</label>
+            <textarea class="form-control" id="vehicleNotes" rows="2" placeholder="Optional"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Speichern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Service-Eintrag Modal ================= -->
+<div class="modal fade" id="entryModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="entryForm">
+        <div class="modal-header">
+          <h5 class="modal-title" id="entryModalTitle">Service-Eintrag hinzufügen</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="entryId" />
+          <input type="hidden" id="entryVehicleId" />
+
+          <div class="row">
+            <div class="col-7 mb-3">
+              <label class="form-label">Art des Service *</label>
+              <select class="form-select" id="entryServiceType" required></select>
+            </div>
+            <div class="col-5 mb-3">
+              <label class="form-label">Datum *</label>
+              <input type="date" class="form-control" id="entryDate" required />
+            </div>
+          </div>
+          <div class="mb-3 d-none" id="entryCustomTypeWrap">
+            <label class="form-label">Bezeichnung</label>
+            <input type="text" class="form-control" id="entryCustomType" placeholder="z. B. Klimaservice" />
+          </div>
+
+          <div class="row">
+            <div class="col-6 mb-3">
+              <label class="form-label">Kilometerstand</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="entryKm" min="0" inputmode="numeric" />
+                <span class="input-group-text">km</span>
+              </div>
+            </div>
+            <div class="col-6 mb-3">
+              <label class="form-label">Betriebsstunden</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="entryHours" min="0" step="0.1" inputmode="decimal" />
+                <span class="input-group-text">h</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Kosten</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="entryCost" min="0" step="0.01" inputmode="decimal" />
+              <span class="input-group-text">€</span>
+            </div>
+          </div>
+
+          <fieldset class="border rounded p-2 mb-3">
+            <legend class="float-none w-auto px-2 fs-6 text-muted mb-0">Nächster Termin fällig (optional)</legend>
+            <div class="row">
+              <div class="col-6 mb-1">
+                <label class="form-label small">bei km</label>
+                <input type="number" class="form-control" id="entryNextDueKm" min="0" inputmode="numeric" />
+              </div>
+              <div class="col-6 mb-1">
+                <label class="form-label small">am Datum</label>
+                <input type="date" class="form-control" id="entryNextDueDate" />
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="mb-3">
+            <label class="form-label">Kommentar</label>
+            <textarea class="form-control" id="entryComment" rows="3" placeholder="Zusätzliche Notizen, z. B. verwendetes Öl, Werkstatt, Teile ..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Speichern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Bestätigungs-Modal ================= -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Bitte bestätigen</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="confirmModalBody">Wirklich löschen?</div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button>
+        <button type="button" class="btn btn-danger" id="confirmModalOk">Löschen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Passwort ändern Modal ================= -->
+<div class="modal fade" id="changePasswordModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form id="changePasswordForm">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-key-fill me-2"></i>Passwort ändern</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Aktuelles Passwort</label>
+            <input type="password" class="form-control" id="cpOldPassword" required autocomplete="current-password" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Neues Passwort</label>
+            <input type="password" class="form-control" id="cpNewPassword" minlength="4" required autocomplete="new-password" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Neues Passwort bestätigen</label>
+            <input type="password" class="form-control" id="cpNewPasswordConfirm" minlength="4" required autocomplete="new-password" />
+          </div>
+          <div class="alert alert-danger small py-2 d-none" id="cpError">Aktuelles Passwort ist falsch.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-primary">Ändern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="appToast" class="toast align-items-center text-bg-dark border-0" role="status">
+    <div class="d-flex">
+      <div class="toast-body" id="appToastBody">Gespeichert.</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+<script src="js/bootstrap.bundle.min.js"></script>
+<script src="js/crypto.js"></script>
+<script src="js/db.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
